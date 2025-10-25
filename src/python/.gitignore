@@ -1,0 +1,171 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environment
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+test_venv/
+temp_tutorial_test/
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# celery beat schedule file
+celerybeat-schedule
+
+# dotenv
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# PyPI credentials - NEVER commit this!
+.pypirc
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+
+
+### VS Code ###
+.vscode/
+
+### Mac OS ###
+.DS_Store
+/.idea/
+
+### README Preview ###
+README_preview.html
+*preview*.py
+generate_preview.py
+make_preview.py
+
+*.txt
+*.dat
+
+# Export folder (generated results) - but keep showcase examples for README
+export/*
+
+# Keep hsdd2 showcase plots
+!export/stars/
+export/stars/*
+!export/stars/plots/
+export/stars/plots/*
+!export/stars/plots/hsdd2.pdf
+!export/stars/plots/hsdd2.png
+
+# Keep overlay M-R curve plots
+!export/all_mr_curves.png
+!export/all_mr_curves.pdf
+!export/all_mr_curves_phase_coded.png
+
+# Keep phase-coded radial plots (NEW in v1.4.2+)
+!export/radial_plots/
+export/radial_plots/*
+!export/radial_plots/RGNJL_v0.70d1.45_radial_profiles.png
+
+# Keep first radial profile examples
+!export/radial_profiles/
+export/radial_profiles/*
+!export/radial_profiles/plots/
+export/radial_profiles/plots/*
+!export/radial_profiles/plots/Mass/
+export/radial_profiles/plots/Mass/*
+!export/radial_profiles/plots/Mass/mass_profile_0.pdf
+!export/radial_profiles/plots/Mass/mass_profile_0.png
+
+!export/radial_profiles/plots/Pressure/
+export/radial_profiles/plots/Pressure/*
+!export/radial_profiles/plots/Pressure/pressure_profile_0.pdf
+!export/radial_profiles/plots/Pressure/pressure_profile_0.png
