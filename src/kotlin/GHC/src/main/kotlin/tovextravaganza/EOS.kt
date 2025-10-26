@@ -14,7 +14,11 @@ import kotlin.math.pow
  * - Energy density (e): km^-2
  * - All values in geometric units (c=G=1)
  */
-class EOS(private val dataDict: Map<String, DoubleArray>, val colNames: List<String>) {
+class EOS(
+    private val dataDict: Map<String, DoubleArray>,      // Numeric columns
+    val colNames: List<String>,                          // All column names
+    private val stringDict: Map<String, List<String>> = emptyMap()  // String columns
+) {
     val pTable: DoubleArray      // Pressure table values
     val nPoints: Int              // Number of data points
     private var iLast = 0         // Cache last index for faster interpolation
@@ -54,13 +58,14 @@ class EOS(private val dataDict: Map<String, DoubleArray>, val colNames: List<Str
     /**
      * Get de/dp at a given pressure using linear interpolation
      * Used in tidal deformability calculations
+     * Note: Does NOT update iLast to avoid interfering with other interpolation calls
      */
     fun getFdedp(p: Double): Double {
         // Return boundary values if outside range
         if (p <= pTable[0]) return fdedp[0]
         if (p >= pTable[nPoints-1]) return fdedp[nPoints-1]
         
-        // Start search from last index (cache optimization)
+        // Start search from last index (cache optimization, but don't update iLast)
         var i = if (iLast < nPoints - 1) iLast else 0
         while (i > 0 && p < pTable[i]) i--
         while (i < nPoints - 1 && p > pTable[i+1]) i++
@@ -72,6 +77,7 @@ class EOS(private val dataDict: Map<String, DoubleArray>, val colNames: List<Str
         val fIp1 = fdedp[i+1]
         
         val frac = (p - pI) / (pIp1 - pI)
+        // Don't update iLast here - let getValue() manage the cache
         return fI + frac * (fIp1 - fI)
     }
     
@@ -110,6 +116,63 @@ class EOS(private val dataDict: Map<String, DoubleArray>, val colNames: List<Str
     fun getEnergyDensity(p: Double): Double = getValue("e", p)
     
     /**
+     * Get string value at given pressure (finds nearest point by energy density)
+     * Uses energy density instead of pressure for phase transitions
+     */
+    private fun getStringValue(colName: String, p: Double): String {
+        if (!stringDict.containsKey(colName)) {
+            return ""
+        }
+        
+        // Get energy density at this pressure (interpolated)
+        val eAtP = getEnergyDensity(p)
+        
+        // Find nearest energy density index
+        val eTable = dataDict["e"]!!
+        var minIdx = 0
+        var minDist = kotlin.math.abs(eTable[0] - eAtP)
+        
+        for (i in 1 until eTable.size) {
+            val dist = kotlin.math.abs(eTable[i] - eAtP)
+            if (dist < minDist) {
+                minDist = dist
+                minIdx = i
+            }
+        }
+        
+        return stringDict[colName]!![minIdx]
+    }
+    
+    /**
+     * Get all column values (except 'p' and 'e') at a given pressure
+     * This interpolates all additional columns at the central pressure
+     * Returns Any to handle both numeric (Double) and string values
+     * @param p: pressure value
+     * @return Map of column name to interpolated value
+     */
+    fun getAllValuesAtPressure(p: Double): Map<String, Any> {
+        val result = mutableMapOf<String, Any>()
+        // Get all columns except p and e (those are in the main CSV header already)
+        val extraCols = colNames.filter { it != "p" && it != "e" }
+        for (col in extraCols) {
+            try {
+                if (stringDict.containsKey(col)) {
+                    result[col] = getStringValue(col, p)
+                } else {
+                    // Check if column exists in dataDict
+                    if (dataDict.containsKey(col)) {
+                        result[col] = getValue(col, p)
+                    }
+                }
+            } catch (e: Exception) {
+                // Skip columns that fail to interpolate (print warning for debugging)
+                // System.err.println("Warning: Failed to interpolate column '$col' at p=$p: ${e.message}")
+            }
+        }
+        return result
+    }
+    
+    /**
      * Get the pressure range covered by this EOS
      * Returns (min pressure, max pressure)
      */
@@ -122,8 +185,8 @@ class EOS(private val dataDict: Map<String, DoubleArray>, val colNames: List<Str
          * Additional columns are allowed and will be interpolatable
          */
         fun fromFile(filename: String): EOS {
-            val (dataDict, colNames) = readCsv(filename)
-            return EOS(dataDict, colNames)
+            val (dataDict, colNames, stringDict) = readCsv(filename)
+            return EOS(dataDict, colNames, stringDict)
         }
         
         /**
@@ -132,7 +195,7 @@ class EOS(private val dataDict: Map<String, DoubleArray>, val colNames: List<Str
          * Automatically identifies 'p' and 'e' columns (can be named differently)
          * Data is sorted by pressure for efficient interpolation
          */
-        private fun readCsv(filename: String): Pair<Map<String, DoubleArray>, List<String>> {
+        private fun readCsv(filename: String): Triple<Map<String, DoubleArray>, List<String>, Map<String, List<String>>> {
             val rawData = mutableListOf<List<String>>()
             var header: List<String>? = null
             var lastCommentRow: List<String>? = null
@@ -192,18 +255,53 @@ class EOS(private val dataDict: Map<String, DoubleArray>, val colNames: List<Str
                 header = listOf("p", "e") + List(nCols - 2) { "col${it}" }
             }
             
-            // Parse numeric data
+            // Normalize header column names (epsilon -> e, etc.)
+            val headerList = header!!.map { col ->
+                when {
+                    col.equals("epsilon", ignoreCase = true) -> "e"
+                    col.equals("pressure", ignoreCase = true) || col == "p" -> "p"
+                    else -> col
+                }
+            }
+            
+            // Parse data - separate numeric and string columns
             val numericData = mutableMapOf<String, MutableList<Double>>()
-            val headerList = header!!
-            headerList.forEach { numericData[it] = mutableListOf() }
+            val stringData = mutableMapOf<String, MutableList<String>>()
+            val columnTypes = mutableMapOf<String, String>()  // "numeric" or "string"
+            
+            headerList.forEach { 
+                numericData[it] = mutableListOf()
+                stringData[it] = mutableListOf()
+            }
             
             rawData.forEach { row ->
                 headerList.forEachIndexed { idx, col ->
                     if (idx < row.size) {
-                        try {
-                            numericData[col]!!.add(row[idx].toDouble())
-                        } catch (e: NumberFormatException) {
-                            // Skip invalid values
+                        // Determine column type on first row
+                        if (!columnTypes.containsKey(col)) {
+                            try {
+                                row[idx].toDouble()
+                                columnTypes[col] = "numeric"
+                            } catch (e: NumberFormatException) {
+                                columnTypes[col] = "string"
+                            }
+                        }
+                        
+                        // Add value based on type
+                        if (columnTypes[col] == "numeric") {
+                            try {
+                                numericData[col]!!.add(row[idx].toDouble())
+                            } catch (e: NumberFormatException) {
+                                // Try to parse as zero or NaN for invalid numeric values
+                                val value = if (row[idx].trim().isEmpty() || row[idx].trim().equals("nan", ignoreCase = true)) {
+                                    Double.NaN
+                                } else {
+                                    0.0
+                                }
+                                numericData[col]!!.add(value)
+                            }
+                        } else {
+                            stringData[col]!!.add(row[idx].trim())
                         }
                     }
                 }
@@ -211,14 +309,38 @@ class EOS(private val dataDict: Map<String, DoubleArray>, val colNames: List<Str
             
             // Sort data by pressure (required for interpolation)
             val sortedData = mutableMapOf<String, DoubleArray>()
+            
+            // Check if we have valid data
+            if (rawData.isEmpty() || numericData.isEmpty() || numericData["p"] == null || numericData["p"]!!.isEmpty()) {
+                throw IllegalArgumentException("No valid data found in CSV file")
+            }
+            
             val colArray = numericData["p"]!!.toDoubleArray()
             val sortIdx = colArray.indices.sortedBy { colArray[it] }
             
             numericData.forEach { (col, vals) ->
-                sortedData[col] = sortIdx.map { vals[it] }.toDoubleArray()
+                if (vals.size == colArray.size) {
+                    sortedData[col] = sortIdx.map { vals[it] }.toDoubleArray()
+                } else {
+                    // Size mismatch - use unsorted data
+                    sortedData[col] = vals.toDoubleArray()
+                }
             }
             
-            return Pair(sortedData, headerList)
+            // Sort string columns (only keep columns that actually have string data)
+            val sortedStringData = mutableMapOf<String, List<String>>()
+            stringData.forEach { (col, vals) ->
+                if (vals.isNotEmpty()) {  // Only add if column has string data
+                    if (vals.size == colArray.size) {
+                        sortedStringData[col] = sortIdx.map { vals[it] }
+                    } else {
+                        // Size mismatch - use unsorted data
+                        sortedStringData[col] = vals
+                    }
+                }
+            }
+            
+            return Triple(sortedData, headerList, sortedStringData)
         }
     }
 }

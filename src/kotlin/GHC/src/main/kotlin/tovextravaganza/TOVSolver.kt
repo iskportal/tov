@@ -255,79 +255,109 @@ fun main(args: Array<String>) {
         val outputDir = File(outputFolder)
         outputDir.mkdirs()
         
-        // Solve for sequence of stars
+        // Determine pressure range for sequence
+        val (pMinVal, pMaxVal) = run {
+            val range = eos.getPressureRange()
+            Pair(kotlin.math.max(range.first, 1e-15), range.second)
+        }
+        
+        // Use log spacing for pressure (better coverage of mass-radius curve)
+        val logPMin = log10(pMinVal)
+        val logPMax = log10(pMaxVal)
+        
+        // Solve TOV + Tidal Deformability in ONE pass (like Python does)
         println("\nSolving TOV equations for $numStars stars...")
-        val stars = solver.solveSequence(numStars)
+        val tidalCalc = TidalCalculator(solver)
+        val allResults = mutableListOf<Map<String, Any>>()
         
-        // Filter stars
-        val validStars = stars.filter { it.isValid() }
-        // Apply physical filters: R < 99 km (not hitting integration limit) and M > 0.05 Msun
-        val filteredStars = validStars.filter { it.radius < 99.0 && it.massSolar > 0.05 }
+        // Generate stars with logarithmically spaced central pressures and compute tidal in one pass
+        for (i in 0 until numStars) {
+            val frac = if (numStars == 1) 0.0 else i.toDouble() / (numStars - 1)
+            val logP = logPMin + frac * (logPMax - logPMin)
+            val pC = 10.0.pow(logP)  // Convert back to linear scale
+            
+            // Progress bar
+            val percent = (i + 1) * 100 / numStars
+            val barLength = 50
+            val filled = (i + 1) * barLength / numStars
+            val bar = "=".repeat(filled) + "-".repeat(barLength - filled)
+            print("\r  Progress: [$bar] $percent% (${i+1}/$numStars)")
+            
+            try {
+                // Compute tidal deformability (this also solves TOV internally)
+                val result = tidalCalc.compute(pC)
+                
+                // Only keep valid tidal results (and apply R < 99 km filter and M > 0.05 Msun)
+                if (result != null && result.isValid() && result.radius < 99.0 && result.massSolar > 0.05) {
+                    val allValues = eos.getAllValuesAtPressure(pC)
+                    
+                    // Build complete result dict with all columns
+                    val fullResult = mutableMapOf<String, Any>(
+                        "p_c" to pC,
+                        "R" to result.radius,
+                        "M_code" to result.massSolar * TOVSolver.MSUN_CODE,
+                        "M_solar" to result.massSolar,
+                        "Lambda" to result.lambda,
+                        "k2" to result.k2
+                    )
+                    
+                    // Add extra EOS columns with 'central_' prefix
+                    for ((col, value) in allValues) {
+                        fullResult["central_$col"] = value
+                    }
+                    
+                    allResults.add(fullResult)
+                }
+            } catch (e: Exception) {
+                // Skip failed solutions (e.g., star too compact, unphysical)
+            }
+        }
+        println()  // New line after progress bar
         
-        println("\nFiltered: kept ${filteredStars.size}/${validStars.size} physical solutions (R < 99 km, M > 0.05 Msun)")
-        println("\nValid solutions: ${validStars.size}/${stars.size}")
+        println("\nFiltered: kept ${allResults.size}/${numStars} physical solutions (R < 99 km, M > 0.05 Msun)")
         
         // Print maximum mass
-        if (validStars.isNotEmpty()) {
-            val maxStar = validStars.maxByOrNull { it.massSolar }
-            println("Maximum mass: ${maxStar!!.massSolar} Msun at R=${maxStar.radius} km")
+        if (allResults.isNotEmpty()) {
+            val maxResult = allResults.maxByOrNull { it["M_solar"] as Double }
+            println("Maximum mass: ${maxResult!!["M_solar"]} Msun at R=${maxResult["R"]} km")
         }
         
-        // Write results to CSV
+        // Write single CSV file with ALL data (like Python does)
         val baseName = File(inputFile).nameWithoutExtension
-        val csvFile = File(outputDir, "${baseName}_stars.csv")
+        val csvFile = File(outputDir, "${baseName}.csv")
         
-        csvFile.bufferedWriter().use { writer ->
-            // Write header with units
+        if (allResults.isNotEmpty()) {
+            // Get all column names in order: standard columns first, then extra
+            val standardCols = listOf("p_c", "R", "M_code", "M_solar", "Lambda", "k2")
             val extraCols = eos.colNames.filter { it != "p" && it != "e" }
-            val header = listOf("p_c(km^-2)", "R(km)", "M(Msun)") + extraCols.map { "${it}(pc)" }
-            writer.write(header.joinToString(","))
-            writer.newLine()
             
-            // Write data for each filtered star
-            for (star in filteredStars) {
-                val values = mutableListOf(
-                    star.centralPressure.toScientific(),
-                    "${star.radius}",
-                    "${star.massSolar}"
-                )
-                
-                // Add any extra EOS columns evaluated at central pressure
-                for (col in extraCols) {
-                    values.add("${eos.getValue(col, star.centralPressure)}")
-                }
-                
-                writer.write(values.joinToString(","))
+            csvFile.bufferedWriter().use { writer ->
+                // Write header
+                val header = standardCols + extraCols.map { "central_$it" }
+                writer.write(header.joinToString(","))
                 writer.newLine()
-            }
-        }
-        
-        println("\nWrote results to: ${csvFile.absolutePath}")
-        
-        // Compute tidal deformability
-        println("\nComputing tidal deformability...")
-        val tidalCalc = TidalCalculator(solver)
-        val tidalResults = filteredStars.mapNotNull { star ->
-            val result = tidalCalc.compute(star.centralPressure)
-            // Only keep valid tidal results (and apply R < 99 km filter)
-            if (result?.isValid() == true && result.radius < 99.0) {
-                Pair(star.massSolar, result.lambda)
-            } else null
-        }
-        
-        // Write tidal results
-        if (tidalResults.isNotEmpty()) {
-            val tidalCsvFile = File(outputDir, "${baseName}_tidal.csv")
-            tidalCsvFile.bufferedWriter().use { writer ->
-                writer.write("M(Msun),Lambda(dimensionless)\n")
-                tidalResults.forEach { (m, l) ->
-                    writer.write("$m,$l\n")
+                
+                // Write data
+                for (result in allResults) {
+                    val values = mutableListOf<String>()
+                    for (col in header) {
+                        val value = result[col]
+                        when (value) {
+                            is Double -> values.add(String.format("%.6e", value))
+                            is Float -> values.add(String.format("%.6e", value))
+                            else -> values.add(value?.toString() ?: "")
+                        }
+                    }
+                    writer.write(values.joinToString(","))
+                    writer.newLine()
                 }
             }
-            println("Tidal results written to: ${tidalCsvFile.absolutePath}")
+            
+            println("Results written to: ${csvFile.absolutePath}")
             
             // Create Lambda plot (log scale)
-            val lambdaPlotFile = Plotter.createLambdaPlot(tidalResults, outputDir, baseName)
+            val lambdaPlotData = allResults.map { Pair(it["M_solar"] as Double, it["Lambda"] as Double) }
+            val lambdaPlotFile = Plotter.createLambdaPlot(lambdaPlotData, outputDir, baseName)
             println("Tidal plot saved to: ${lambdaPlotFile.absolutePath}")
         }
         
@@ -338,6 +368,8 @@ fun main(args: Array<String>) {
         
         val pngFile = Plotter.createPNGPlot(csvFile)
         println("PNG plot saved to: ${pngFile.absolutePath}")
+        
+        // Note: Only ONE CSV file is created (matching Python behavior)
         
     } catch (e: ParseException) {
         println("Error parsing command line: ${e.message}")
